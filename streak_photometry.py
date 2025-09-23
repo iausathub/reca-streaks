@@ -192,6 +192,7 @@ def streak_photometry(expnum, detector, image_data):
     if zeropoint is not None:
         sb_mag_arcsec2 = -2.5 * np.log10(sb_arcsec) + zeropoint
         sb_mag_arcsec2_err = 1.0857 * (sb_arcsec_err / sb_arcsec)  # double check this
+        print(f"(Using photometric zeropoint {zeropoint:.2f} to convert to magnitude)")
         print(f"Surface brightness: {sb_mag_arcsec2:.3f} ± {sb_mag_arcsec2_err:.3f} mag/arcsec²")
 
     # --- Plots ---
