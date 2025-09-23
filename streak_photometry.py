@@ -1,36 +1,34 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-from astropy.io import fits
+
+from . import get_decam_data
 
 
-def streak_photometry (image_data):
-    # For expnum 1103448, detector 26!
-    header = {
-        "GAINA": 3.95321314938068,
-        "GAINB": 3.95211128886414,
-        "RDNOISEA": 5.747898,
-        "RDNOISEB": 5.928192
-    }
-    
+def streak_photometry(expnum, detector):
+    hdu_list = get_decam_data(expnum, detector)
+    header = hdu_list[1].header
+    image_data = hdu_list[1].data
+
+    # Estimate average gain and read noise from two amplifiers
     gain = 0.5 * (header["GAINA"] + header["GAINB"])
     read_noise = 0.5 * (header["RDNOISEA"] + header["RDNOISEB"])
-    
+
     # --- Step 1: Mask bright sources ---
     median = np.median(image_data)
     std = np.std(image_data)
     threshold = median + 3 * std
     mask = image_data > threshold
     masked_data = np.ma.array(image_data, mask=mask)
-    
+
     # --- Step 2: Collapse image to 1D profile across y ---
     profile_y = np.ma.mean(masked_data, axis=1)
     y = np.arange(len(profile_y))
-    
+
     # --- Step 3: Fit a 1D Gaussian to the profile ---
     def gaussian(y, A, y0, sigma, offset):
         return A * np.exp(-(y - y0)**2 / (2 * sigma**2)) + offset
-    
+
     A0 = profile_y.max()
     y0 = y[np.argmax(profile_y)]
     sigma0 = 3
@@ -39,53 +37,50 @@ def streak_photometry (image_data):
     popt, _ = curve_fit(gaussian, y, profile_y.filled(offset0), p0=p0)
     A_fit, y0_fit, sigma_fit, offset_fit = popt
     fwhm = 2.355 * sigma_fit
-    
+
     # --- Step 4: Define on-streak and off-streak regions ---
     on_ymin = int(y0_fit - 3 * sigma_fit)
     on_ymax = int(y0_fit + 3 * sigma_fit)
     height = on_ymax - on_ymin
-    
+
     off1_ymin = max(0, on_ymin - height)
     off1_ymax = on_ymin
     off2_ymin = on_ymax
     off2_ymax = min(image_data.shape[0], on_ymax + height)
-    
+
     region_mask = np.zeros_like(image_data, dtype=int)
     region_mask[on_ymin:on_ymax, :] = 1
     region_mask[off1_ymin:off1_ymax, :] = 2
     region_mask[off2_ymin:off2_ymax, :] = 2
-    
+
     # --- Step 5: Extract pixel values ---
     on_region = masked_data[on_ymin:on_ymax, :]
     off1_region = masked_data[off1_ymin:off1_ymax, :]
     off2_region = masked_data[off2_ymin:off2_ymax, :]
-    
+
     on_sum = on_region.sum()
     on_unmasked_pixels = np.sum(~on_region.mask)
-    
-    print ("on_sum", on_sum)
-    print ("on_unmasked_pixels", on_unmasked_pixels)
-    
-    
+
+    print("on_sum", on_sum)
+    print("on_unmasked_pixels", on_unmasked_pixels)
+
     # --- Step 6: Estimate background ---
     off_pixels = np.sum(~off1_region.mask) + np.sum(~off2_region.mask)
     off_sum = off1_region.sum() + off2_region.sum()
     bkg_per_pixel = off_sum / off_pixels
-    
-    print ("Number of pixel sin background region off streak: ", off_pixels)
-    
+
+    print("Number of pixel sin background region off streak: ", off_pixels)
+
     empirical_bkg = bkg_per_pixel * on_unmasked_pixels
-    
-    
+
     # --- Step 7: Final flux and surface brightness ---
     streak_flux = on_sum - empirical_bkg
-    
-    
+
     pixel_scale = 0.27
-    
+
     sb_pixel = streak_flux / on_unmasked_pixels
     sb_arcsec = sb_pixel / (pixel_scale ** 2)
-    
+
     # --- Step 8: Error estimation ---
     def estimate_flux_uncertainty(streak_flux, on_unmasked, bkg_std, gain, read_noise):
         """
@@ -101,54 +96,55 @@ def streak_photometry (image_data):
             Gain in e/ADU
         read_noise: `float`
             Read noise in e.
-    
+
         Returns
         -------
         flux_err : `float`
             Error in the streak flux (ADU)
         regime: `str`
-            Flux or background dominated.  
+            Flux or background dominated.
         """
         flux_e = gain * streak_flux
         bkg_std_e = gain * bkg_std
-        
+
         signal_per_pixel = flux_e / on_unmasked
         noise_background_var = on_unmasked * (bkg_std_e**2 + read_noise**2)
-        
+
         if signal_per_pixel < (5 * bkg_std_e):
             regime = "background-dominated"
             flux_var = noise_background_var
         else:
             regime = "source-dominated"
             flux_var = flux_e + noise_background_var
-    
-        print ("I'm inside the function")
-        print (f"regime: {regime}")
-        print (f"Streak flux in electrons {flux_e}")
-        print (f"Noise background var {noise_background_var}")
-        print (f"Noise background std dev {np.sqrt(noise_background_var)}")
-        print (f"Streak flux error in electrons {np.sqrt(flux_var)}")
-            
+
+        print(f"regime: {regime}")
+        print(f"Streak flux in electrons {flux_e}")
+        print(f"Noise background var {noise_background_var}")
+        print(f"Noise background std dev {np.sqrt(noise_background_var)}")
+        print(f"Streak flux error in electrons {np.sqrt(flux_var)}")
+
         flux_err = np.sqrt(flux_var) / gain  # back to ADU
-    
-        
+
         return flux_err, regime
-    
+
     off_vals = np.hstack([
         off1_region[~off1_region.mask].ravel(),
         off2_region[~off2_region.mask].ravel()
     ])
-    
+
     bkg_std = np.std(off_vals)
-    
-    streak_flux_err, regime = estimate_flux_uncertainty(streak_flux, on_unmasked_pixels, bkg_std, gain, read_noise)
-    
+
+    streak_flux_err, regime = estimate_flux_uncertainty(streak_flux,
+                                                        on_unmasked_pixels,
+                                                        bkg_std,
+                                                        gain,
+                                                        read_noise)
+
     print(f"Streak Flux error: {streak_flux_err} (ADU)")
-    
-    
+
     sb_pixel_err = streak_flux_err / on_unmasked_pixels
     sb_arcsec_err = sb_pixel_err / pixel_scale**2
-    
+
     # --- Output ---
     print("\n=== Aperture Photometry Result ===")
     print(f"Streak center (y0): {y0_fit:.2f} px")
@@ -156,9 +152,7 @@ def streak_photometry (image_data):
     print(f"On-streak region: y = [{on_ymin}, {on_ymax}], {on_unmasked_pixels} unmasked pixels")
     print(f"Streak flux: {streak_flux:.2f}")
     print(f"Surface brightness: {sb_arcsec:.2f} ± {sb_arcsec_err:.2f} counts/arcsec² [{regime}]")
-    
-    
-    
+
     # --- Final Output Summary ---
     print("\n=== Aperture Photometry Result ===")
     print(f"Streak center (y0): {y0_fit:.2f} px")
@@ -170,13 +164,10 @@ def streak_photometry (image_data):
     print(f"Empirical background: {empirical_bkg:.2f}")
     print(f"Streak flux (signal - background): {streak_flux:.2f}")
     print(f"Noise regime: {regime}")
-    
+
     print(f"Surface brightness: {sb_pixel:.2f} ± {sb_pixel_err:.2f} counts/pixel²")
     print(f"Surface brightness: {sb_arcsec:.2f} ± {sb_arcsec_err:.2f} counts/arcsec²")
-    
-    
-    
-    
+
     # --- Plots ---
     plt.figure(figsize=(10, 6))
     plt.imshow(mask, origin='lower', cmap='gray')
@@ -186,7 +177,7 @@ def streak_photometry (image_data):
     plt.colorbar(label='Mask (True = masked)')
     plt.tight_layout()
     plt.show()
-    
+
     plt.figure(figsize=(10, 6))
     plt.imshow(image_data, origin='lower', cmap='gray',
                vmin=np.percentile(image_data, 5),
@@ -199,7 +190,7 @@ def streak_photometry (image_data):
     plt.colorbar(label='Region: 0=none, 1=on-streak, 2=off-streak')
     plt.tight_layout()
     plt.show()
-    
+
     plt.figure(figsize=(10, 5))
     plt.plot(y, profile_y, label="1D Profile", color='black')
     plt.axvline(on_ymin, color='red', linestyle='--', label='On-streak')
@@ -215,6 +206,6 @@ def streak_photometry (image_data):
     plt.tight_layout()
     plt.show()
 
-
-streak_array = np.loadtxt("sample_image.txt")  # For expnum 1103448, detector 26!
-streak_photometry (streak_array)
+# Example to run the main function
+# streak_array = np.loadtxt("sample_image.txt")  # For expnum 1103448, detector 26!
+# streak_photometry (streak_array)
