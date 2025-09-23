@@ -23,7 +23,12 @@ def streak_photometry(expnum, detector, image_data):
     """
     hdu_list = retrieve_hdu_image(expnum, detector)
     header = hdu_list[1].header
-    # image_data = hdu_list[1].data  # no - this would be the entire detector
+    header_expnum = hdu_list[0].header
+    try:
+        zeropoint = header_expnum['MAGZERO']
+    except ValueError:
+        print("Photometric zeropoint not available in image header.")
+        zeropoint = None
 
     # Estimate average gain and read noise from two amplifiers
     gain = 0.5 * (header["GAINA"] + header["GAINB"])
@@ -182,6 +187,12 @@ def streak_photometry(expnum, detector, image_data):
 
     print(f"Surface brightness: {sb_pixel:.2f} ± {sb_pixel_err:.2f} counts/pixel²")
     print(f"Surface brightness: {sb_arcsec:.2f} ± {sb_arcsec_err:.2f} counts/arcsec²")
+
+    # Convert to magnitudes using flux zeropoint
+    if zeropoint is not None:
+        sb_mag_arcsec2 = -2.5 * np.log10(sb_arcsec) + zeropoint
+        sb_mag_arcsec2_err = 1.0857 * (sb_arcsec_err / sb_arcsec)  # double check this
+        print(f"Surface brightness: {sb_mag_arcsec2:.3f} ± {sb_mag_arcsec2_err:.3f} mag/arcsec²")
 
     # --- Plots ---
     plt.figure(figsize=(10, 6))
