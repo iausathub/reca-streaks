@@ -26,8 +26,8 @@ def streak_photometry(expnum, detector, image_data):
     header_expnum = hdu_list[0].header
     try:
         zeropoint = header_expnum['MAGZERO']
-    except ValueError:
-        print("Photometric zeropoint not available in image header.")
+    except KeyError:
+        print("Photometric zeropoint not available in image header, reporting instrumental flux only.")
         zeropoint = None
 
     # Estimate average gain and read noise from two amplifiers
