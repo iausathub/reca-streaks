@@ -2,11 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-from . import get_decam_data
+from get_decam_data import retrieve_hdu_image
 
 
 def streak_photometry(expnum, detector):
-    hdu_list = get_decam_data(expnum, detector)
+    hdu_list = retrieve_hdu_image(expnum, detector)
     header = hdu_list[1].header
     image_data = hdu_list[1].data
 
