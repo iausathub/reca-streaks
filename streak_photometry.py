@@ -5,10 +5,25 @@ from scipy.optimize import curve_fit
 from get_decam_data import retrieve_hdu_image
 
 
-def streak_photometry(expnum, detector):
+def streak_photometry(expnum, detector, image_data):
+    """
+    Do photometry on a bright (or faint) streak.
+
+    Parameters
+    ----------
+    expnum : `int`
+        DECam exposure number, used to get the correct header
+    detector : `int`
+        DECam detector number, used to get the correct header
+    image_data : `np.array`
+        2D array of a small portion of the given expnum and detector,
+        which has already been determined to contain a streak
+
+    The function prints out the results of the photometry to the screen.
+    """
     hdu_list = retrieve_hdu_image(expnum, detector)
     header = hdu_list[1].header
-    image_data = hdu_list[1].data
+    # image_data = hdu_list[1].data  # no - this would be the entire detector
 
     # Estimate average gain and read noise from two amplifiers
     gain = 0.5 * (header["GAINA"] + header["GAINB"])
