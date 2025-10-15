@@ -7,7 +7,7 @@ from get_decam_data import retrieve_hdu_image
 
 def streak_photometry(expnum, detector, image_data):
     """
-    Do photometry on a bright (or faint) streak.
+    Do aperture photometry on a bright (or faint) streak.
 
     Parameters
     ----------
@@ -233,6 +233,220 @@ def streak_photometry(expnum, detector, image_data):
     plt.tight_layout()
     plt.show()
 
-# Example to run the main function
-# streak_array = np.loadtxt("sample_image.txt")  # For expnum 1103448, detector 26!
-# streak_photometry (streak_array)
+
+def streak_photometry_psf_fitting (expnum, detector, image_data, pdf=None):
+    """
+    Do fitting photometry on a bright (or faint) streak.
+    Model: equation 3 ofVeres+12
+    "Improved Asteroid Astrometry and Photometry with Trail Fitting"
+    https://iopscience.iop.org/article/10.1086/668616/pdf
+
+    Parameters
+    ----------
+    expnum : `int`
+        DECam exposure number, used to get the correct header
+    detector : `int`
+        DECam detector number, used to get the correct header
+    image_data : `np.array`
+        2D array of a small portion of the given expnum and detector,
+        which has already been determined to contain a streak
+
+    The function prints out the results of the photometry to the screen.
+
+    Returns
+    -------
+    final_dict: `dict`
+        Dictionary with results and photometry.
+    """
+
+    hdu_list = retrieve_hdu_image(expnum, detector)
+    header = hdu_list[1].header
+    header_two = hdu_list[0].header
+    
+    gain = 0.5 * (header["GAINA"] + header["GAINB"])
+    read_noise = 0.5 * (header["RDNOISEA"] + header["RDNOISEB"])
+    print ("average amp gain (e/ADU)", gain)
+    print ("average read noise (e)", read_noise)
+
+    if 'MAGZERO' in header_two:
+        zero_point = header_expnum['MAGZERO']
+        print ("zero point [mag]: ", zero_point)
+    else:
+        print ("No MAGZERO keyword in header")
+        zero_point = None
+    
+    # Build a simple bad pixel mask
+    sigma_bad_pixel_mask = 3
+    median = np.median(image_data)
+    std = np.std(image_data)
+    threshold = median + sigma_bad_pixel_mask * std
+    bp_mask = image_data > threshold
+    
+    
+    ny, nx = image_data.shape
+    x_grid, y_grid = np.meshgrid(np.arange(nx), np.arange(ny))
+    x_flat = x_grid.ravel()
+    y_flat = y_grid.ravel()
+    z_flat = image_data.ravel()
+    mask_flat = bp_mask.ravel()
+    
+    # Apply mask: exclude masked pixels from fitting
+    x_flat = x_flat[~mask_flat]
+    y_flat = y_flat[~mask_flat]
+    z_flat = z_flat[~mask_flat]
+    
+    
+    # === Trail model: θ is free ===
+    def trail_model(coords, b, phi, L, sigma, theta, x0, y0):
+        x, y = coords
+        sin_t = np.sin(theta)
+        cos_t = np.cos(theta)
+        x_rot = (x - x0) * sin_t + (y - y0) * cos_t
+        Q = (x - x0) * cos_t - (y - y0) * sin_t
+        term1 = b
+        term2 = (phi / L) * (1 / (2 * sigma * np.sqrt(2 * np.pi)))
+        term3 = np.exp(- (x_rot ** 2) / (2 * sigma ** 2))
+        erf1 = (Q + L/2) / (sigma * np.sqrt(2))
+        erf2 = (Q - L/2) / (sigma * np.sqrt(2))
+        return term1 + term2 * term3 * (erf(erf1) - erf(erf2))
+    
+    # === Initial guess and bounds ===
+    b0 = np.median(image_data)
+    phi0 = np.sum(image_data) - b0 * image_data.size
+    L0 = 2000
+    sigma0 = 1.0
+    theta0 = 0.0
+    x0_0 = nx / 2
+    y0_0 = ny / 2
+    p0 = [b0, phi0, L0, sigma0, theta0, x0_0, y0_0]
+    
+    bounds = ([0, 0, 5, 0.3, -np.pi, 0, 0], [1e9, 1e9, 1e4, 10, np.pi, nx-1, ny-1])
+    
+    # === Fit ===
+    popt, pcov = curve_fit(trail_model, (x_flat, y_flat), z_flat, p0=p0, bounds=bounds, maxfev=5000)
+    b_fit, phi_fit, L_fit, sigma_fit, theta_fit, x0_fit, y0_fit = popt
+    phi_err = np.sqrt(np.diag(pcov))[1]
+    
+    # === Reconstruct model ===
+    model_image = trail_model((x_grid, y_grid), *popt)
+    
+    # Approximate trail aperture mask using rotated bounding box
+    coords_x = x_grid - x0_fit
+    coords_y = y_grid - y0_fit
+    cos_t = np.cos(theta_fit)
+    sin_t = np.sin(theta_fit)
+    q = coords_x * cos_t + coords_y * sin_t   # along-trail
+    r = coords_x * sin_t - coords_y * cos_t   # cross-trail
+    
+    # Another mask, for the chi2
+    mask = ((np.abs(q) < length / 2) & (np.abs(r) < width / 2)) & ~bp_mask
+    ap_data = image_data[mask]
+    ap_model = model_image[mask]
+    ap_N = np.sum(mask)
+    
+    # === Chi² and reduced Chi² ===
+    noise_var = (gain * ap_model + read_noise**2) / gain**2
+    chi2 = np.sum((ap_data - ap_model)**2 / noise_var)
+    chi2_red = chi2 / (ap_N - 7 - 1)
+    
+    # === S/N from section 3 near Eq. 8: S / sqrt(S + B)
+    S = phi_fit
+    B = b_fit * ap_N
+    SNR = S / np.sqrt(S + B)
+    
+    # === Surface brightness ===
+    # area_arcsec2 = ap_N * pixel_scale**2
+    psf_fwhm_arcsec = 2.355 * sigma_fit * pixel_scale
+    area_arcsec2 = L_fit * pixel_scale * psf_fwhm_arcsec
+    
+    sb_arcsec2 = S / area_arcsec2
+    sb_arcsec2_err = phi_err / area_arcsec2
+    
+    # === Print results ===
+    print("\n=== Trail Fit Results (θ free) ===")
+    print(f"Background: {b_fit:.2f} counts/pixel")
+    print(f"Total flux (phi): {phi_fit:.2f} ± {phi_err:.2f} ADU")
+    print(f"Trail length (L): {L_fit:.2f} px")
+    print(f"PSF sigma: {sigma_fit:.2f} px → FWHM = {2.355 * sigma_fit:.2f} px --> {2.355 * sigma_fit*pixel_scale:.2f} arcsec ")
+    print(f"Trail angle θ: {np.degrees(theta_fit):.2f} deg")
+    print(f"Center: x0 = {x0_fit:.2f}, y0 = {y0_fit:.2f}")
+    print(f"Surface brightness: {sb_arcsec2:.2f} ± {sb_arcsec2_err:.2f} counts/arcsec²")
+    print(f"S/N (section 3): {SNR:.1f}")
+    print(f"Chi²: {chi2:.2f}")
+    print(f"Reduced Chi²: {chi2_red:.4f}")
+
+    if zero_point: 
+        sb_mag_arcsec2 = zero_point - 2.5 * np.log10(sb_arcsec2)
+        # Approximate the error as the inverse of SNR
+        sb_mag_arcsec2_err = 1.0857 / SNR
+    
+        # Output
+        print(f"\nSurface brightness (mag/arcsec²): {sb_mag_arcsec2:.2f} ± {sb_mag_arcsec2_err:.4f}")
+        print(f"Signal-to-noise ratio (SNR): {SNR:.1f}")
+    else:
+        print ("Image with no zero point, can't convert to magnitude")
+        sb_mag_arcsec2, sb_mag_arcsec2_err = None, None
+
+
+    final_dict = {
+    "SB_counts": sb_arcsec2,
+    "SB_counts_err": sb_arcsec2_err,
+    "SB_mag": sb_mag_arcsec2 if sb_mag_arcsec2 else "No zeropoint",
+    "SB_mag_err": sb_mag_arcsec2_err if sb_mag_arcsec2_err else "—",
+    "Zeropoint": zero_point if zero_point else "No zeropoint",
+    "Background": b_fit,
+    "Flux_total": phi_fit,
+    "Flux_err": phi_err,
+    "Trail_Length_px": L_fit,
+    "PSF_Sigma_px": sigma_fit,
+    "PSF_FWHM_arcsec": 2.355 * sigma_fit * pixel_scale,
+    "Trail_angle_deg": np.degrees(theta_fit),
+    "Center_x0": x0_fit,
+    "Center_y0": y0_fit,
+    "SNR": SNR,
+    "Chi2": chi2,
+    "Chi2_red": chi2_red
+    }
+    
+    
+    # === Plots ===
+    fig, axes = plt.subplots(4, 1, figsize=(15, 12))  # 4 rows
+    
+    # Observed image
+    im0 = axes[0].imshow(image_data, origin='lower', cmap='viridis',
+                         vmin=np.percentile(image_data, 5),
+                         vmax=np.percentile(image_data, 95))
+    axes[0].set_title("Observed Image")
+    plt.colorbar(im0, ax=axes[0], orientation='vertical', label='Counts (ADU)')
+    
+    # Fitted model
+    im1 = axes[1].imshow(model_image, origin='lower', cmap='gray')
+    axes[1].set_title("Fitted Model")
+    plt.colorbar(im1, ax=axes[1], orientation='vertical', label='Model (ADU)')
+    
+    # Residuals
+    residuals = image_data - model_image
+    im2 = axes[2].imshow(residuals, origin='lower', cmap='seismic', vmin=-10, vmax=10)
+    axes[2].set_title("Residual (Data - Model)")
+    plt.colorbar(im2, ax=axes[2], orientation='vertical', label='Residual (ADU)')
+    
+    # Bad pixel mask
+    im3 = axes[3].imshow(bp_mask, origin='lower', cmap='gray_r')
+    axes[3].set_title("Bad Pixel Mask (Thresholded)")
+    plt.colorbar(im3, ax=axes[3], orientation='vertical', label='Mask (1=bad, 0=good)')
+    
+    # Common axes labels
+    for ax in axes:
+        ax.set_xlabel("X (px)")
+        ax.set_ylabel("Y (px)")
+
+    if pdf is not None:
+        plt.tight_layout()
+        pdf.savefig(fig)
+        plt.tight_layout()
+    else:
+        plt.tight_layout()
+        plt.tight_layout()
+
+    return final_dict
+        
