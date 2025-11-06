@@ -2,10 +2,239 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
+from scipy.special import erf
+
 from get_decam_data import retrieve_hdu_image
 
 
-def streak_photometry(expnum, detector, image_data):
+def streak_photometry(image_data, expnum=None,
+                      detector=None, hdu_list=None,
+                      sigma_mask=5):
+    """
+    Do aperture photometry on a bright (or faint) streak using a rectangular aperture
+    defined by the length of the image and the fitted FWHM from a Gaussian profile.
+    
+    Returns surface brightness in counts/arcsec² with propagated error.
+    """
+    from scipy.optimize import curve_fit
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    if (expnum is not None) and (detector is not None):
+        hdu_list = retrieve_hdu_image(expnum, detector)
+        header = hdu_list[1].header
+        header_expnum = hdu_list[0].header
+        try:
+            zeropoint = header_expnum['MAGZERO']
+        except KeyError:
+            print("Photometric zeropoint not available in image header, reporting instrumental flux only.")
+            zeropoint = None
+    elif hdu_list is not None:
+        header = hdu_list[1].header
+        header_expnum = hdu_list[0].header
+        try:
+            zeropoint = header_expnum['MAGZERO']
+        except KeyError:
+            print("Photometric zeropoint not available in image header, reporting instrumental flux only.")
+            zeropoint = None
+    else:
+        print("Provide (expnum, detector) or hdulist")
+        return 
+
+    gain = 0.5 * (header["GAINA"] + header["GAINB"])
+    read_noise = 0.5 * (header["RDNOISEA"] + header["RDNOISEB"])
+
+    # Step 1: Mask bright sources
+    median = np.median(image_data)
+    std = np.std(image_data)
+    threshold = median + sigma_mask * std
+    mask = image_data > threshold
+    masked_data = np.ma.array(image_data, mask=mask)
+
+    # Step 2: Collapse image to 1D profile across y
+    profile_y = np.ma.mean(masked_data, axis=1)
+    y = np.arange(len(profile_y))
+
+    def gaussian(y, A, y0, sigma, offset):
+        return A * np.exp(-(y - y0)**2 / (2 * sigma**2)) + offset
+
+    A0 = profile_y.max()
+    y0 = y[np.argmax(profile_y)]
+    sigma0 = 3
+    offset0 = np.median(profile_y)
+    p0 = [A0, y0, sigma0, offset0]
+    popt, _ = curve_fit(gaussian, y, profile_y.filled(offset0), p0=p0)
+    A_fit, y0_fit, sigma_fit, offset_fit = popt
+    fwhm_pix = 2.355 * sigma_fit
+
+    # Step 3: Define on/off-streak regions
+    on_ymin = int(y0_fit - 3 * sigma_fit)
+    on_ymax = int(y0_fit + 3 * sigma_fit)
+    height = on_ymax - on_ymin
+
+    off1_ymin = max(0, on_ymin - height)
+    off1_ymax = on_ymin
+    off2_ymin = on_ymax
+    off2_ymax = min(image_data.shape[0], on_ymax + height)
+
+    region_mask = np.zeros_like(image_data, dtype=int)
+    region_mask[on_ymin:on_ymax, :] = 1
+    region_mask[off1_ymin:off1_ymax, :] = 2
+    region_mask[off2_ymin:off2_ymax, :] = 2
+
+    on_region = masked_data[on_ymin:on_ymax, :]
+    off1_region = masked_data[off1_ymin:off1_ymax, :]
+    off2_region = masked_data[off2_ymin:off2_ymax, :]
+
+    on_sum = on_region.sum()
+    on_unmasked_pixels = np.sum(~on_region.mask)
+
+    off_pixels = np.sum(~off1_region.mask) + np.sum(~off2_region.mask)
+    off_sum = off1_region.sum() + off2_region.sum()
+    bkg_per_pixel = off_sum / off_pixels
+
+    empirical_bkg = bkg_per_pixel * on_unmasked_pixels
+    streak_flux = on_sum - empirical_bkg
+
+    pixel_scale = 0.2634  # arcsec/pix
+
+    # -Aperture Area ---
+    trail_length_pix = image_data.shape[1]  # Full image width assumed
+    area_arcsec2 = trail_length_pix * fwhm_pix * pixel_scale**2
+    sb_arcsec = streak_flux / area_arcsec2
+
+    # --- Error Estimation ---
+    def estimate_flux_uncertainty(streak_flux, on_unmasked, bkg_std, gain, read_noise, threshold=5, verbose=True):
+        """
+        Estimate flux uncertainty in ADU for aperture photometry.
+    
+        Parameters
+        ----------
+        streak_flux : float
+            Total signal in the aperture [ADU]
+        on_unmasked : int
+            Number of unmasked pixels in the aperture
+        bkg_std : float
+            Standard deviation of background pixels [ADU]
+        gain : float
+            Gain [e⁻/ADU]
+        read_noise : float
+            Read noise [e⁻]
+        threshold : float, optional
+            SNR threshold (in sigma) to switch between background and source dominated
+        verbose : bool, optional
+            Whether to print regime and intermediate quantities
+    
+        Returns
+        -------
+        flux_err : float
+            Uncertainty in flux [ADU]
+        regime : str
+            'background-dominated' or 'source-dominated'
+        snr : float
+            Signal-to-noise ratio (optional use)
+        """
+        flux_e = gain * streak_flux
+        bkg_std_e = gain * bkg_std
+    
+        # Per-pixel signal (electrons)
+        signal_per_pixel = flux_e / on_unmasked
+    
+        # Variance from background and read noise
+        noise_background_var = on_unmasked * (bkg_std_e**2 + read_noise**2)
+    
+        # Determine noise regime
+        if signal_per_pixel < (threshold * bkg_std_e):
+            regime = "background-dominated"
+            total_var_e = noise_background_var
+        else:
+            regime = "source-dominated"
+            total_var_e = flux_e + noise_background_var
+    
+        # Convert total variance back to ADU
+        flux_err = np.sqrt(total_var_e) / gain
+    
+        # Estimate SNR
+        snr = flux_e / np.sqrt(total_var_e)
+    
+        if verbose:
+            print(f"Regime: {regime}")
+            print(f"Flux (e⁻): {flux_e:.2f}")
+            print(f"Noise background variance: {noise_background_var:.2f} e⁻²")
+            print(f"Flux error: {flux_err:.2f} ADU")
+            print(f"SNR: {snr:.1f}")
+    
+        return flux_err, regime, snr
+
+
+    off_vals = np.hstack([
+        off1_region[~off1_region.mask].ravel(),
+        off2_region[~off2_region.mask].ravel()
+    ])
+    bkg_std = np.std(off_vals)
+
+    streak_flux_err, regime, snr = estimate_flux_uncertainty(
+        streak_flux, on_unmasked_pixels, bkg_std, gain, read_noise)
+    sb_arcsec_err = streak_flux_err / area_arcsec2
+
+    print("\n=== Aperture Photometry Result ===")
+    print(f"Streak center (y0): {y0_fit:.2f} px")
+    print(f"Width: σ = {sigma_fit:.2f} px, FWHM ≈ {fwhm_pix:.2f} px")
+    print(f"Streak flux: {streak_flux:.2f} ADU ± {streak_flux_err:.2f}")
+    print(f"Surface brightness: {sb_arcsec:.2f} ± {sb_arcsec_err:.2f} counts/arcsec² [{regime}]")
+    print(f"SNR: {snr:.2f}")
+
+    if zeropoint is not None:
+        sb_mag = -2.5 * np.log10(sb_arcsec) + zeropoint
+        sb_mag_err = 1.0857 * (sb_arcsec_err / sb_arcsec)
+        print(f"(Using zeropoint {zeropoint:.2f})")
+        print(f"Surface brightness: {sb_mag:.3f} ± {sb_mag_err:.3f} mag/arcsec²")
+
+    # --- Plots ---
+    plt.figure(figsize=(10, 6))
+    plt.imshow(mask, origin='lower', cmap='gray')
+    plt.title("Masked Pixels (bright sources)")
+    plt.xlabel("X (pixels)")
+    plt.ylabel("Y (pixels)")
+    plt.colorbar(label='Mask (True = masked)')
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(10, 6))
+    plt.imshow(image_data, origin='lower', cmap='gray',
+               vmin=np.percentile(image_data, 5),
+               vmax=np.percentile(image_data, 99))
+    plt.imshow(np.ma.masked_where(region_mask == 0, region_mask),
+               origin='lower', cmap='coolwarm', alpha=0.5)
+    plt.title("Streak and Background Regions")
+    plt.xlabel("X (pixels)")
+    plt.ylabel("Y (pixels)")
+    plt.colorbar(label='Region: 0=none, 1=on-streak, 2=off-streak')
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(y, profile_y, label="1D Profile", color='black')
+    plt.axvline(on_ymin, color='red', linestyle='--', label='On-streak')
+    plt.axvline(on_ymax, color='red', linestyle='--')
+    plt.axvline(off1_ymin, color='blue', linestyle='--', label='Off-streak')
+    plt.axvline(off1_ymax, color='blue', linestyle='--')
+    plt.axvline(off2_ymin, color='blue', linestyle='--')
+    plt.axvline(off2_ymax, color='blue', linestyle='--')
+    plt.legend()
+    plt.xlabel("Y (pixels)")
+    plt.ylabel("Mean Counts")
+    plt.title("Streak Profile and Regions")
+    plt.tight_layout()
+    plt.show()
+
+    return sb_arcsec, sb_arcsec_err
+
+
+
+def streak_photometry_old(image_data, expnum=None,
+                      detector=None, hdu_list=None,
+                      sigma_mask=5):
     """
     Do aperture photometry on a bright (or faint) streak.
 
@@ -21,15 +250,27 @@ def streak_photometry(expnum, detector, image_data):
 
     The function prints out the results of the photometry to the screen.
     """
-    hdu_list = retrieve_hdu_image(expnum, detector)
-    header = hdu_list[1].header
-    header_expnum = hdu_list[0].header
-    try:
-        zeropoint = header_expnum['MAGZERO']
-    except KeyError:
-        print("Photometric zeropoint not available in image header, reporting instrumental flux only.")
-        zeropoint = None
-
+    if (expnum is not None) and (detector is not None):
+        hdu_list = retrieve_hdu_image(expnum, detector)
+        header = hdu_list[1].header
+        header_expnum = hdu_list[0].header
+        try:
+            zeropoint = header_expnum['MAGZERO']
+        except KeyError:
+            print("Photometric zeropoint not available in image header, reporting instrumental flux only.")
+            zeropoint = None
+    elif hdu_list is not None:
+        header = hdu_list[1].header
+        header_expnum = hdu_list[0].header
+        try:
+            zeropoint = header_expnum['MAGZERO']
+        except KeyError:
+            print("Photometric zeropoint not available in image header, reporting instrumental flux only.")
+            zeropoint = None
+    else:
+        print ("Provide (expnum, detector) or hdulist")
+        return 
+        
     # Estimate average gain and read noise from two amplifiers
     gain = 0.5 * (header["GAINA"] + header["GAINB"])
     read_noise = 0.5 * (header["RDNOISEA"] + header["RDNOISEB"])
@@ -37,7 +278,7 @@ def streak_photometry(expnum, detector, image_data):
     # --- Step 1: Mask bright sources ---
     median = np.median(image_data)
     std = np.std(image_data)
-    threshold = median + 3 * std
+    threshold = median + sigma_mask * std
     mask = image_data > threshold
     masked_data = np.ma.array(image_data, mask=mask)
 
@@ -89,17 +330,20 @@ def streak_photometry(expnum, detector, image_data):
     off_sum = off1_region.sum() + off2_region.sum()
     bkg_per_pixel = off_sum / off_pixels
 
-    print("Number of pixel sin background region off streak: ", off_pixels)
+    print("Number of pixels in background region off streak: ", off_pixels)
 
     empirical_bkg = bkg_per_pixel * on_unmasked_pixels
 
     # --- Step 7: Final flux and surface brightness ---
     streak_flux = on_sum - empirical_bkg
 
-    pixel_scale = 0.27
+    pixel_scale = 0.2634 # arsec / pix
 
+    # Current
     sb_pixel = streak_flux / on_unmasked_pixels
     sb_arcsec = sb_pixel / (pixel_scale ** 2)
+
+
 
     # --- Step 8: Error estimation ---
     def estimate_flux_uncertainty(streak_flux, on_unmasked, bkg_std, gain, read_noise):
@@ -234,7 +478,12 @@ def streak_photometry(expnum, detector, image_data):
     plt.show()
 
 
-def streak_photometry_psf_fitting (expnum, detector, image_data, pdf=None):
+def streak_photometry_psf_fitting (image_data,
+                                   expnum=None,
+                                   detector=None,
+                                   hdu_list=None,
+                                   pdf=None,
+                                   sigma_mask=5):
     """
     Do fitting photometry on a bright (or faint) streak.
     Model: equation 3 ofVeres+12
@@ -259,16 +508,35 @@ def streak_photometry_psf_fitting (expnum, detector, image_data, pdf=None):
         Dictionary with results and photometry.
     """
 
-    hdu_list = retrieve_hdu_image(expnum, detector)
-    header = hdu_list[1].header
-    header_two = hdu_list[0].header
+    pixel_scale = 0.2634 # arsec / pix
+    
+    if (expnum is not None) and (detector is not None):
+        hdu_list = retrieve_hdu_image(expnum, detector)
+        header = hdu_list[1].header
+        header_expnum = hdu_list[0].header
+        try:
+            zeropoint = header_expnum['MAGZERO']
+        except KeyError:
+            print("Photometric zeropoint not available in image header, reporting instrumental flux only.")
+            zeropoint = None
+    elif hdu_list is not None:
+        header = hdu_list[1].header
+        header_expnum = hdu_list[0].header
+        try:
+            zeropoint = header_expnum['MAGZERO']
+        except KeyError:
+            print("Photometric zeropoint not available in image header, reporting instrumental flux only.")
+            zeropoint = None
+    else:
+        print ("Provide (expnum, detector) or hdulist")
+        return 
     
     gain = 0.5 * (header["GAINA"] + header["GAINB"])
     read_noise = 0.5 * (header["RDNOISEA"] + header["RDNOISEB"])
-    print ("average amp gain (e/ADU)", gain)
-    print ("average read noise (e)", read_noise)
+    print ("Average amp gain (e/ADU)", gain)
+    print ("Average read noise (e)", read_noise)
 
-    if 'MAGZERO' in header_two:
+    if 'MAGZERO' in header_expnum:
         zero_point = header_expnum['MAGZERO']
         print ("zero point [mag]: ", zero_point)
     else:
@@ -276,12 +544,12 @@ def streak_photometry_psf_fitting (expnum, detector, image_data, pdf=None):
         zero_point = None
     
     # Build a simple bad pixel mask
-    sigma_bad_pixel_mask = 3
+    sigma_bad_pixel_mask = sigma_mask
     median = np.median(image_data)
     std = np.std(image_data)
     threshold = median + sigma_bad_pixel_mask * std
     bp_mask = image_data > threshold
-    
+    print ("Hola")
     
     ny, nx = image_data.shape
     x_grid, y_grid = np.meshgrid(np.arange(nx), np.arange(ny))
@@ -325,10 +593,27 @@ def streak_photometry_psf_fitting (expnum, detector, image_data, pdf=None):
     # === Fit ===
     popt, pcov = curve_fit(trail_model, (x_flat, y_flat), z_flat, p0=p0, bounds=bounds, maxfev=5000)
     b_fit, phi_fit, L_fit, sigma_fit, theta_fit, x0_fit, y0_fit = popt
-    phi_err = np.sqrt(np.diag(pcov))[1]
+   
+
+    # --- Step 5: Error propagation via residuals ---
+    model_fit_vals = trail_model((x_flat, y_flat), *popt)
+    residuals = z_flat - model_fit_vals
+    dof = len(z_flat) - len(popt)
+    residual_std = np.std(residuals)
+    cov_scaled = pcov * residual_std**2
+    phi_err = np.sqrt(cov_scaled[1, 1]) # Scaled error on phi
     
     # === Reconstruct model ===
     model_image = trail_model((x_grid, y_grid), *popt)
+
+ 
+    # === Define aperture box (aligned to trail angle) === 
+    length = L_fit + 6 * sigma_fit 
+    width = 3 * sigma_fit 
+    Npix = int(length * width)
+    print ("length ", length)
+    print ("width", width)
+    print ("Npix", Npix)
     
     # Approximate trail aperture mask using rotated bounding box
     coords_x = x_grid - x0_fit
