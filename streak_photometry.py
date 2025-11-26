@@ -9,17 +9,14 @@ from get_decam_data import retrieve_hdu_image
 
 def streak_photometry(image_data, expnum=None,
                       detector=None, hdu_list=None,
-                      sigma_mask=5):
+                      sigma_mask=5, make_plots=False):
     """
     Do aperture photometry on a bright (or faint) streak using a rectangular aperture
     defined by the length of the image and the fitted FWHM from a Gaussian profile.
     
     Returns surface brightness in counts/arcsec² with propagated error.
     """
-    from scipy.optimize import curve_fit
-    import numpy as np
-    import matplotlib.pyplot as plt
-
+    
     if (expnum is not None) and (detector is not None):
         hdu_list = retrieve_hdu_image(expnum, detector)
         header = hdu_list[1].header
@@ -190,51 +187,52 @@ def streak_photometry(image_data, expnum=None,
         print(f"(Using zeropoint {zeropoint:.2f})")
         print(f"Surface brightness: {sb_mag:.3f} ± {sb_mag_err:.3f} mag/arcsec²")
 
-    # --- Plots ---
-    plt.figure(figsize=(10, 6))
-    plt.imshow(mask, origin='lower', cmap='gray')
-    plt.title("Masked Pixels (bright sources)")
-    plt.xlabel("X (pixels)")
-    plt.ylabel("Y (pixels)")
-    plt.colorbar(label='Mask (True = masked)')
-    plt.tight_layout()
-    plt.show()
-
-    plt.figure(figsize=(10, 6))
-    plt.imshow(image_data, origin='lower', cmap='gray',
-               vmin=np.percentile(image_data, 5),
-               vmax=np.percentile(image_data, 99))
-    plt.imshow(np.ma.masked_where(region_mask == 0, region_mask),
-               origin='lower', cmap='coolwarm', alpha=0.5)
-    plt.title("Streak and Background Regions")
-    plt.xlabel("X (pixels)")
-    plt.ylabel("Y (pixels)")
-    plt.colorbar(label='Region: 0=none, 1=on-streak, 2=off-streak')
-    plt.tight_layout()
-    plt.show()
-
-    plt.figure(figsize=(10, 5))
-    plt.plot(y, profile_y, label="1D Profile", color='black')
-    plt.axvline(on_ymin, color='red', linestyle='--', label='On-streak')
-    plt.axvline(on_ymax, color='red', linestyle='--')
-    plt.axvline(off1_ymin, color='blue', linestyle='--', label='Off-streak')
-    plt.axvline(off1_ymax, color='blue', linestyle='--')
-    plt.axvline(off2_ymin, color='blue', linestyle='--')
-    plt.axvline(off2_ymax, color='blue', linestyle='--')
-    plt.legend()
-    plt.xlabel("Y (pixels)")
-    plt.ylabel("Mean Counts")
-    plt.title("Streak Profile and Regions")
-    plt.tight_layout()
-    plt.show()
+    if make_plots: 
+        # --- Plots ---
+        plt.figure(figsize=(10, 6))
+        plt.imshow(mask, origin='lower', cmap='gray')
+        plt.title("Masked Pixels (bright sources)")
+        plt.xlabel("X (pixels)")
+        plt.ylabel("Y (pixels)")
+        plt.colorbar(label='Mask (True = masked)')
+        plt.tight_layout()
+        plt.show()
+    
+        plt.figure(figsize=(10, 6))
+        plt.imshow(image_data, origin='lower', cmap='gray',
+                   vmin=np.percentile(image_data, 5),
+                   vmax=np.percentile(image_data, 99))
+        plt.imshow(np.ma.masked_where(region_mask == 0, region_mask),
+                   origin='lower', cmap='coolwarm', alpha=0.5)
+        plt.title("Streak and Background Regions")
+        plt.xlabel("X (pixels)")
+        plt.ylabel("Y (pixels)")
+        plt.colorbar(label='Region: 0=none, 1=on-streak, 2=off-streak')
+        plt.tight_layout()
+        plt.show()
+    
+        plt.figure(figsize=(10, 5))
+        plt.plot(y, profile_y, label="1D Profile", color='black')
+        plt.axvline(on_ymin, color='red', linestyle='--', label='On-streak')
+        plt.axvline(on_ymax, color='red', linestyle='--')
+        plt.axvline(off1_ymin, color='blue', linestyle='--', label='Off-streak')
+        plt.axvline(off1_ymax, color='blue', linestyle='--')
+        plt.axvline(off2_ymin, color='blue', linestyle='--')
+        plt.axvline(off2_ymax, color='blue', linestyle='--')
+        plt.legend()
+        plt.xlabel("Y (pixels)")
+        plt.ylabel("Mean Counts")
+        plt.title("Streak Profile and Regions")
+        plt.tight_layout()
+        plt.show()
 
     return sb_arcsec, sb_arcsec_err
 
 
 
 def streak_photometry_old(image_data, expnum=None,
-                      detector=None, hdu_list=None,
-                      sigma_mask=5):
+                          detector=None, hdu_list=None,
+                          sigma_mask=5):
     """
     Do aperture photometry on a bright (or faint) streak.
 
@@ -483,10 +481,11 @@ def streak_photometry_psf_fitting (image_data,
                                    detector=None,
                                    hdu_list=None,
                                    pdf=None,
-                                   sigma_mask=5):
+                                   sigma_mask=5,
+                                   make_plots=False):
     """
     Do fitting photometry on a bright (or faint) streak.
-    Model: equation 3 ofVeres+12
+    Model: equation 3 of Veres+12
     "Improved Asteroid Astrometry and Photometry with Trail Fitting"
     https://iopscience.iop.org/article/10.1086/668616/pdf
 
@@ -693,45 +692,45 @@ def streak_photometry_psf_fitting (image_data,
     "Chi2_red": chi2_red
     }
     
+    if make_plots:
+        # === Plots ===
+        fig, axes = plt.subplots(4, 1, figsize=(15, 12))  # 4 rows
+        
+        # Observed image
+        im0 = axes[0].imshow(image_data, origin='lower', cmap='viridis',
+                             vmin=np.percentile(image_data, 5),
+                             vmax=np.percentile(image_data, 95))
+        axes[0].set_title("Observed Image")
+        plt.colorbar(im0, ax=axes[0], orientation='vertical', label='Counts (ADU)')
+        
+        # Fitted model
+        im1 = axes[1].imshow(model_image, origin='lower', cmap='gray')
+        axes[1].set_title("Fitted Model")
+        plt.colorbar(im1, ax=axes[1], orientation='vertical', label='Model (ADU)')
+        
+        # Residuals
+        residuals = image_data - model_image
+        im2 = axes[2].imshow(residuals, origin='lower', cmap='seismic', vmin=-10, vmax=10)
+        axes[2].set_title("Residual (Data - Model)")
+        plt.colorbar(im2, ax=axes[2], orientation='vertical', label='Residual (ADU)')
+        
+        # Bad pixel mask
+        im3 = axes[3].imshow(bp_mask, origin='lower', cmap='gray_r')
+        axes[3].set_title("Bad Pixel Mask (Thresholded)")
+        plt.colorbar(im3, ax=axes[3], orientation='vertical', label='Mask (1=bad, 0=good)')
+        
+        # Common axes labels
+        for ax in axes:
+            ax.set_xlabel("X (px)")
+            ax.set_ylabel("Y (px)")
     
-    # === Plots ===
-    fig, axes = plt.subplots(4, 1, figsize=(15, 12))  # 4 rows
-    
-    # Observed image
-    im0 = axes[0].imshow(image_data, origin='lower', cmap='viridis',
-                         vmin=np.percentile(image_data, 5),
-                         vmax=np.percentile(image_data, 95))
-    axes[0].set_title("Observed Image")
-    plt.colorbar(im0, ax=axes[0], orientation='vertical', label='Counts (ADU)')
-    
-    # Fitted model
-    im1 = axes[1].imshow(model_image, origin='lower', cmap='gray')
-    axes[1].set_title("Fitted Model")
-    plt.colorbar(im1, ax=axes[1], orientation='vertical', label='Model (ADU)')
-    
-    # Residuals
-    residuals = image_data - model_image
-    im2 = axes[2].imshow(residuals, origin='lower', cmap='seismic', vmin=-10, vmax=10)
-    axes[2].set_title("Residual (Data - Model)")
-    plt.colorbar(im2, ax=axes[2], orientation='vertical', label='Residual (ADU)')
-    
-    # Bad pixel mask
-    im3 = axes[3].imshow(bp_mask, origin='lower', cmap='gray_r')
-    axes[3].set_title("Bad Pixel Mask (Thresholded)")
-    plt.colorbar(im3, ax=axes[3], orientation='vertical', label='Mask (1=bad, 0=good)')
-    
-    # Common axes labels
-    for ax in axes:
-        ax.set_xlabel("X (px)")
-        ax.set_ylabel("Y (px)")
-
-    if pdf is not None:
-        plt.tight_layout()
-        pdf.savefig(fig)
-        plt.tight_layout()
-    else:
-        plt.tight_layout()
-        plt.tight_layout()
+        if pdf is not None:
+            plt.tight_layout()
+            pdf.savefig(fig)
+            plt.tight_layout()
+        else:
+            plt.tight_layout()
+            plt.tight_layout()
 
     return final_dict
         
