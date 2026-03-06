@@ -192,3 +192,13 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# FITS data files
+*.fits
+*.fits.gz
+
+# macOS
+.DS_Store
+
+# Generated figures (keep PDFs, ignore PNGs)
+figures/*.png
