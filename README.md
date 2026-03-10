@@ -20,7 +20,7 @@ reca-streaks/
 ├── notebooks/
 │   └── paper_notebooks/
 │       ├── DECam_streaks_photometry-V2.ipynb  # Main analysis notebook
-│       ├── get_data.ipynb                     # Data download examples
+│       ├── get_data.ipynb                     # Data download 
 │       └── simulated_streak.ipynb             # Streak simulations
 └── README.md
 ```
@@ -165,42 +165,6 @@ S/N (section 3): 1386.5
 Chi²: 4302522.71
 Reduced Chi²: 286.3576
 Surface brightness: 18.529 ± 0.0002 mag/arcsec²
-```
-
-### 3. Streak Detection and Rotation
-
-`detect_lines_hough()` - Detects streaks using Hough transform via the satmetrics LineDetection class.
-
-**Example:**
-
-```python
-from streak_photometry import detect_lines_hough
-
-detections = detect_lines_hough(
-    image,
-    threshold=0.075,
-    flux_prop_thresholds=[0.1, 0.2, 0.3, 1],
-    blur_kernel_sizes=[3, 5, 9, 11],
-    brightness_cuts=(2, 2),
-    thresholding_cut=0.5
-)
-
-# Returns dictionary with:
-# - "Lines": polar coordinates (rho, theta)
-# - "Angles": angles in radians
-# - "Cartesian Coordinates": endpoint coordinates
-# - "Thresholded Image", "Blurred Image", "Edges": processed images
-```
-
-`rotate_streak_horizontal()` - Rotates the image so the detected streak is horizontal.
-
-**Example:**
-
-```python
-from streak_photometry import rotate_streak_horizontal
-
-lines = detections["Lines"]
-rotated_image, coords, angle = rotate_streak_horizontal(image, lines)
 ```
 
 ## Notebooks
@@ -388,8 +352,7 @@ if len(detections["Lines"]) > 0:
 
 If you use this code, please cite:
 
-> Plazas et al. (2026), "Satellite Streak Photometry in DECam Images", 
-> RECA 2025 / eSPECTRA Conference Proceedings
+ https://drive.google.com/file/d/197nayTaqmTiJN0onE_tskd_5oKVXJGbA/view
 
 ## References
 
@@ -398,9 +361,6 @@ If you use this code, please cite:
 
 - **NOIRLab Archive**: https://astroarchive.noirlab.edu
 
-## Final Report
-
-Previous work: https://drive.google.com/file/d/197nayTaqmTiJN0onE_tskd_5oKVXJGbA/view
 
 ## License
 
@@ -409,3 +369,6 @@ See LICENSE file for details.
 ## Contact
 
 For questions about this code, please open an issue on GitHub or contact the authors.
+Andrés Alejandro Plazas Malagón (plazasmalagon@gmail.com)
+Meredith Rawls (mrawls@uw.edu)
+
