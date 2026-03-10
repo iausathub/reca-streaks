@@ -413,14 +413,15 @@ def streak_photometry_psf_fitting(
     y0_0 = ny / 2
     p0 = [b0, phi0, L0, sigma0, theta0, x0_0, y0_0]
 
-    bounds = (
-        [0, 0, 5, 0.3, -np.pi, 0, 0],
-        [1e9, 1e9, 1e4, 10, np.pi, nx - 1, ny - 1],
-    )
+    #bounds = (
+    #    [0, 0, 5, 0.3, -np.pi, 0, 0],
+    #    [1e9, 1e9, 1e4, 10, np.pi, nx - 1, ny - 1],
+    #)
 
     popt, pcov = curve_fit(
         trail_model, (x_flat, y_flat), z_flat, p0=p0,
-        bounds=bounds, maxfev=5000,
+        #bounds=bounds, maxfev=5000,
+        maxfev=5000,
     )
     b_fit, phi_fit, L_fit, sigma_fit, theta_fit, x0_fit, y0_fit = popt
 
