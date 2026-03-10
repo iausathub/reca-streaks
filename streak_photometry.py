@@ -6,8 +6,11 @@ from scipy.special import erf
 
 from get_decam_data import retrieve_hdu_image
 
+import line_detection_updated as ld
+import image_rotation as ir
 
-def streak_photometry(image_data, expnum=None,
+
+def streak_photometry_aperture(image_data, expnum=None,
                       detector=None, hdu_list=None,
                       sigma_mask=5, make_plots=False):
     """
@@ -210,15 +213,15 @@ def streak_photometry(image_data, expnum=None,
         plt.title("Streak and Background Regions")
         plt.xlabel("X (pixels)")
         plt.ylabel("Y (pixels)")
-        plt.colorbar(label='Region: 0=none, 1=on-streak, 2=off-streak')
+        #plt.colorbar(label='Region: 0=none, 1=on-streak, 2=off-streak')
         plt.tight_layout()
         plt.savefig("streak_and_background.pdf", bbox_inches='tight')
         plt.show()
     
         plt.figure(figsize=(10, 5))
         plt.plot(y, profile_y, label="1D Profile", color='black')
-        plt.axvline(on_ymin + 2, color='red', linestyle='--', label='On-streak')
-        plt.axvline(on_ymax - 2, color='red', linestyle='--')
+        plt.axvline(on_ymin + 0.2, color='red', linestyle='--', label='On-streak')
+        plt.axvline(on_ymax - 0.2, color='red', linestyle='--')
         plt.axvline(off1_ymin, color='blue', linestyle='--', label='Off-streak')
         plt.axvline(off1_ymax, color='blue', linestyle='--')
         plt.axvline(off2_ymin, color='blue', linestyle='--')
@@ -338,17 +341,17 @@ def streak_photometry_psf_fitting (image_data,
     # === Initial guess and bounds ===
     b0 = np.median(image_data)
     phi0 = np.sum(image_data) - b0 * image_data.size
-    L0 = 2000
-    sigma0 = 1.0
+    L0 = 1900
+    sigma0 = 0.9
     theta0 = 0.0
     x0_0 = nx / 2
     y0_0 = ny / 2
     p0 = [b0, phi0, L0, sigma0, theta0, x0_0, y0_0]
     
-    bounds = ([0, 0, 5, 0.3, -np.pi, 0, 0], [1e9, 1e9, 1e4, 10, np.pi, nx-1, ny-1])
+    bounds = ([0, 0, 5, 0.1, -np.pi, 0, 0], [1e9, 1e9, 2500, 10, np.pi, nx-1, ny-1])
     
     # === Fit ===
-    popt, pcov = curve_fit(trail_model, (x_flat, y_flat), z_flat, p0=p0, bounds=bounds, maxfev=5000)
+    popt, pcov = curve_fit(trail_model, (x_flat, y_flat), z_flat, p0=p0, maxfev=5000, bounds=bounds, )
     b_fit, phi_fit, L_fit, sigma_fit, theta_fit, x0_fit, y0_fit = popt
    
 
@@ -493,4 +496,47 @@ def streak_photometry_psf_fitting (image_data,
             plt.tight_layout()
 
     return final_dict
+
+
+def detect_lines_hough(image, threshold=0.075, flux_prop_thresholds=[0.1,0.2,0.3,1], 
+                       blur_kernel_sizes=[3,5,9,11], brightness_cuts=(2,2), thresholding_cut=0.5 ,**kwargs):
+
+    """
+    Applies Hough Transform line detection on a DECam image using the custom satmetrics module.
+
+    Parameters:
+        image (ndarray): 2D image array.
+        **kwargs: Optional keyword arguments to pass into the LineDetection object (e.g. thresholds).
+    """
+    lineDetector = ld.LineDetection(image)
+    lineDetector.threshold = threshold
+    lineDetector.flux_prop_thresholds = flux_prop_thresholds
+    lineDetector.blur_kernel_sizes = blur_kernel_sizes
+    lineDetector.brightness_cuts = brightness_cuts
+    lineDetector.thresholding_cut = thresholding_cut
+    # Detector instance
+    # lineDetector = ld.LineDetection(image)
+    #lineDetector.threshold = 0.012 it could break the threshold
+    for key, value in kwargs.items():
+        setattr(lineDetector, key, value)
+
+    # Hough transform
+    detections = lineDetector.hough_transformation()
+    return detections
+
+
+def rotate_streak_horizontal(image, lines):
+    """
+    Rotates the image so that the main detected streak (line) is horizontal.
+    
+    """
+    if lines is None or len(lines) == 0:
+        raise ValueError("No lines detected to use for rotation.")
+    
+    line = lines[0]
+    coords = [[line[0], line[1]], [line[2], line[3]]]
+    angle = ir.determine_rotation_angle(coords)
+    rotated_image = ir.rotate_image(image, angle, coords)
+    
+    return rotated_image, coords, angle
         
