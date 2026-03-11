@@ -1,6 +1,6 @@
 # reca-streaks
 
-Satellite streak photometry for Dark Energy Camera (DECam) images. This repository contains code and notebooks used in the paper "DECam_streaks_photometry_RECA2025_eSPECTRA_2026MAR10.pdf".
+Satellite streak photometry for Dark Energy Camera (DECam) images. This repository contains code and notebooks used in the paper "[Identifying and Measuring Satellite Streaks in DECam Images](https://drive.google.com/file/d/197nayTaqmTiJN0onE_tskd_5oKVXJGbA/view)".
 
 ## Overview
 
@@ -25,7 +25,7 @@ reca-streaks/
 └── README.md
 ```
 
-The code also relies on the companion `satmetrics` package (located in `../satmetrics/`):
+The code also relies on the companion `satmetrics` package (https://github.com/iausathub/satmetrics):
 - `line_detection_updated.py` - Hough transform line detection
 - `image_rotation.py` - Image rotation and streak isolation
 - `satmetrics.py` - Main streak detection pipeline
@@ -123,7 +123,7 @@ Surface brightness: 18.935 ± 0.001 mag/arcsec²
 `streak_photometry_psf_fitting()` - Fits a 2D trail model to measure surface brightness.
 
 **Method:**
-- Implements the trail model from Veres et al. 2012, "Improved Asteroid Astrometry and Photometry with Trail Fitting" (Eq. 3)
+- Implements the trail model from Veres et al. 2012, "[Improved Asteroid Astrometry and Photometry with Trail Fitting"](https://iopscience.iop.org/article/10.1086/668616) (Eq. 3)
 - Model parameters:
   - `b`: background level
   - `phi`: total integrated flux
@@ -369,6 +369,6 @@ See LICENSE file for details.
 ## Contact
 
 For questions about this code, please open an issue on GitHub or contact the authors.
-Andrés Alejandro Plazas Malagón (plazasmalagon@gmail.com)
-Meredith Rawls (mrawls@uw.edu)
+- Andrés Alejandro Plazas Malagón (plazasmalagon@gmail.com)
+- Meredith Rawls (mrawls@uw.edu)
 
